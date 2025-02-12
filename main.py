@@ -1,2 +1,2 @@
-print("hey")
-print(5)
+nowe = 5
+print(nowe+2)
