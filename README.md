@@ -1,6 +1,6 @@
 ## Hi there 👋
 
-✨  This is a simple graphic editor for creating covers of black metal and dungeon synth bands. For now the interface is very primitive, but improvements are planned in the future. ✨ 
+✨  This is a simple graphic editor for creating covers art of black metal and dungeon synth bands. For now the interface is very primitive, but improvements are planned in the future. ✨ 
 
 What's available now:
 
