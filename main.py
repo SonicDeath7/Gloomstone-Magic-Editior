@@ -3,12 +3,14 @@ from tkinter import filedialog, ttk, messagebox
 from PIL import Image, ImageTk, ImageOps, ImageFilter, ImageEnhance
 import numpy as np
 import threading
+import pygame
+import time
 
 
 class GothicEditor:
     def __init__(self, root):
         self.root = root
-        self.root.title("DungeonArtStudios")
+        self.root.title("DDI DC style in version 0.1.0")
         self.root.geometry("1280x1024")
         self.set_gothic_theme()
 
@@ -38,6 +40,11 @@ class GothicEditor:
 
         self.create_widgets()
         self.setup_layout()
+
+        # Инициализация pygame для музыки
+        pygame.mixer.init()
+        self.background_music_playing = False
+        self.root.bind("<<ProcessingComplete>>", self.on_processing_complete)
 
     def set_gothic_theme(self):
         self.root.configure(bg='#0a0a0a')
@@ -70,30 +77,21 @@ class GothicEditor:
             'borderwidth': 3
         }
 
-        self.btn_open = tk.Button(
-            self.control_frame,
-            text="Open Image",
-            command=self.open_image,
-            **button_style
-        )
+        buttons = [
+            ("Open Image", self.open_image),
+            ("Apply Effects", self.apply_effects),
+            ("Save Image", self.save_image),
+            ("🎵 Toggle Music", self.toggle_music)
+        ]
 
-        self.btn_apply = tk.Button(
-            self.control_frame,
-            text="Apply Effects",
-            command=self.apply_effects,
-            **button_style
-        )
-
-        self.btn_save = tk.Button(
-            self.control_frame,
-            text="Save Image",
-            command=self.save_image,
-            **button_style
-        )
-
-        self.btn_open.pack(pady=10, fill=tk.X, padx=5)
-        self.btn_apply.pack(pady=10, fill=tk.X, padx=5)
-        self.btn_save.pack(pady=10, fill=tk.X, padx=5)
+        for text, command in buttons:
+            btn = tk.Button(
+                self.control_frame,
+                text=text,
+                command=command,
+                **button_style
+            )
+            btn.pack(pady=10, fill=tk.X, padx=5)
 
     def create_sliders(self):
         sliders = [
@@ -130,7 +128,6 @@ class GothicEditor:
         self.control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
         self.image_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH, padx=10, pady=10)
 
-        # Метки для изображений с готическим шрифтом
         self.original_label = ttk.Label(self.image_frame, text="Original Image", style='TLabel')
         self.original_label.pack(side=tk.LEFT, padx=20, pady=10)
 
@@ -150,16 +147,23 @@ class GothicEditor:
                 self.show_error(f"Error loading image: {str(e)}")
 
     def show_images(self):
-        for label in [self.original_label, self.processed_label]:
-            label.configure(image='')
+        if not hasattr(self, 'original_preview'):
+            self.original_preview = None
+            self.processed_preview = None
+
+        resize_method = (
+            Image.Resampling.BILINEAR
+            if self.pixelation_var.get() > 5
+            else Image.Resampling.LANCZOS
+        )
 
         if self.base_image:
-            original_preview = self.base_image.resize(self.preview_size, Image.Resampling.LANCZOS)
+            original_preview = self.base_image.resize(self.preview_size, resize_method)
             self.original_preview = ImageTk.PhotoImage(original_preview)
             self.original_label.configure(image=self.original_preview)
 
         if self.processed_image:
-            processed_preview = self.processed_image.resize(self.preview_size, Image.Resampling.LANCZOS)
+            processed_preview = self.processed_image.resize(self.preview_size, resize_method)
             self.processed_preview = ImageTk.PhotoImage(processed_preview)
             self.processed_label.configure(image=self.processed_preview)
 
@@ -174,7 +178,6 @@ class GothicEditor:
 
     def apply_base_effects(self, img):
         try:
-            # Оптимизированные операции
             if self.brightness_var.get() != 1.0:
                 img = ImageEnhance.Brightness(img).enhance(self.brightness_var.get())
             if self.contrast_var.get() != 1.0:
@@ -226,37 +229,42 @@ class GothicEditor:
                 self.processed_preview = ImageTk.PhotoImage(processed_preview)
                 self.processed_label.configure(image=self.processed_preview)
 
-                # Фоновая обработка полного изображения
                 threading.Thread(target=self.process_full_image).start()
             except Exception as e:
                 self.show_error(str(e))
 
     def process_full_image(self):
-        with self.lock:
-            try:
+        try:
+            with self.lock:
                 full_processed = self.apply_base_effects(self.base_image.copy())
                 full_processed = self.apply_filter(full_processed)
                 self.processed_image = full_processed
-            except Exception as e:
-                self.show_error(str(e))
+        except Exception as e:
+            self.show_error(f"Processing error: {str(e)}")
+        finally:
+            self.root.event_generate("<<ProcessingComplete>>")
 
     def vectorized_floyd_steinberg(self, image):
         try:
             img = image.convert("L")
             pixels = np.array(img, dtype=np.float32) / 255.0
+            h, w = pixels.shape
 
-            height, width = pixels.shape
-            for y in range(height - 1):
-                for x in range(1, width - 1):
-                    old_val = pixels[y, x]
+            errors = np.zeros((h + 1, w + 2), dtype=np.float32)
+
+            for y in range(h):
+                for x in range(w):
+                    old_val = pixels[y, x] + errors[y, x + 1]
                     new_val = np.round(old_val)
                     quant_error = old_val - new_val
 
                     pixels[y, x] = new_val
-                    pixels[y:y + 2, x - 1:x + 2] += quant_error * np.array([
-                        [0, 0, 7 / 16],
-                        [3 / 16, 5 / 16, 1 / 16]
-                    ])
+
+                    # Распределение ошибки
+                    errors[y, x + 2] += quant_error * 7 / 16
+                    errors[y + 1, x] += quant_error * 3 / 16
+                    errors[y + 1, x + 1] += quant_error * 5 / 16
+                    errors[y + 1, x + 2] += quant_error * 1 / 16
 
             return Image.fromarray((np.clip(pixels, 0, 1) * 255).astype(np.uint8))
         except Exception as e:
@@ -272,43 +280,49 @@ class GothicEditor:
             h, w = pixels.shape
             threshold = np.tile(pattern, (h // 2 + 1, w // 2 + 1))[:h, :w]
             pixels = np.where(pixels < threshold, 0, 255)
+
             return Image.fromarray(pixels.astype(np.uint8))
         except Exception as e:
             self.show_error(str(e))
             return image
 
-    def apply_sepia(self, image):
-        try:
-            sepia_matrix = np.array([
-                [0.393, 0.769, 0.189],
-                [0.349, 0.686, 0.168],
-                [0.272, 0.534, 0.131]
-            ])
-            rgb_array = np.array(image.convert("RGB"), dtype=np.float64)
-            sepia_array = np.dot(rgb_array, sepia_matrix.T).clip(0, 255).astype(np.uint8)
-            return Image.fromarray(sepia_array, 'RGB')
-        except Exception as e:
-            self.show_error(str(e))
-            return image
+    def apply_sepia(self, img):
+        sepia_filter = np.array([[0.393, 0.769, 0.189],
+                                 [0.349, 0.686, 0.168],
+                                 [0.272, 0.534, 0.131]])
 
-    def save_image(self):
-        if not self.processed_image:
-            self.show_error("No processed image to save!")
-            return
+        img = np.array(img)
+        img = img.dot(sepia_filter.T)
+        img = np.clip(img, 0, 255).astype(np.uint8)
 
-        try:
-            path = filedialog.asksaveasfilename(
-                defaultextension=".png",
-                filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg"), ("BMP", "*.bmp")]
-            )
-            if path:
-                self.processed_image.save(path)
-                messagebox.showinfo("Success", "Image saved successfully!")
-        except Exception as e:
-            self.show_error(str(e))
+        return Image.fromarray(img)
+
+    def toggle_music(self):
+        if self.background_music_playing:
+            pygame.mixer.music.pause()
+        else:
+            if not pygame.mixer.music.get_busy():
+                try:
+                    pygame.mixer.music.load("music.mp3")
+                    pygame.mixer.music.play(-1)
+                except Exception as e:
+                    self.show_error(f"Music error: {str(e)}")
+                    return
+            else:
+                pygame.mixer.music.unpause()
+        self.background_music_playing = not self.background_music_playing
+
+    def on_processing_complete(self, event=None):
+        pass  # Можно добавить уведомление или логирование
 
     def show_error(self, message):
-        messagebox.showerror("Error", message, icon='error')
+        messagebox.showerror("Error", message)
+
+    def save_image(self):
+        if self.processed_image:
+            file_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG files", "*.png")])
+            if file_path:
+                self.processed_image.save(file_path)
 
 
 if __name__ == "__main__":
