@@ -10,7 +10,7 @@ import time
 class GothicEditor:
     def __init__(self, root):
         self.root = root
-        self.root.title("DDI DC style in version 0.1.0")
+        self.root.title("Gloomstone_Magic_Editior 0.1.0")
         self.root.geometry("1280x1024")
         self.set_gothic_theme()
 
